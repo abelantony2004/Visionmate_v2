@@ -1,0 +1,13 @@
+# requirements.txt
+
+# LiDAR
+rplidar-roboticia>=0.9    # RPLidar A1/A2/A3 direct serial (no ROS2 needed)
+
+# YOLO
+ultralytics>=8.0          # YOLOv8n — use NCNN export for best Pi speed
+
+# Audio / TTS
+pyttsx3>=2.90             # offline TTS (uses espeak on Pi)
+
+# Already available on Pi OS Bookworm (no pip needed):
+#   numpy, opencv-python (python3-opencv), picamera2
