@@ -8,8 +8,8 @@ BUTTON1_PIN = 17  # Physical Pin 11
 BUTTON2_PIN = 27  # Physical Pin 13
 
 # --- Your Python Scripts ---
-BUTTON1_SCRIPT = "/home/abel/claudeMate/lidar_new.py"  # ← Change this
-BUTTON2_SCRIPT = "/home/abel/claudeMate/yolo_live.py"  # ← Change this
+BUTTON1_SCRIPT = "/home/abel/Visionmate_v2/main.py"  # ← Change this
+BUTTON2_SCRIPT = "/home/abel/Visionmate_v2/ocr.py"  # ← Change this
 
 
 # --- Open GPIO chip (Pi 5 uses chip 4) ---

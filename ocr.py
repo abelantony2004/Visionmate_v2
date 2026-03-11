@@ -23,14 +23,14 @@ from datetime import datetime
 import cv2
 
 try:
-    from picamera2 import Picamera2
+    from picamera2 import Picamera2 # type: ignore
     PICAMERA2_ERR = None
 except Exception as exc:  # pragma: no cover
     Picamera2 = None
     PICAMERA2_ERR = exc
 
 try:
-    import picamera
+    import picamera # type: ignore
     PICAMERA_ERR = None
 except Exception as exc:  # pragma: no cover
     picamera = None
