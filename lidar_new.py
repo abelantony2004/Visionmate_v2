@@ -78,7 +78,7 @@ LIDAR_MOUNT_OFFSET_DEG = 0.0   # rotate if your 0° mark ≠ forward
 # ── Front 180° scan geometry (paper: -5° to +185°, here ±90° of forward) ─────
 FORWARD_ARC_DEG = 180.0        # total sweep kept
 MIN_DIST_M      = 0.10         # ignore readings closer than this (sensor noise)
-MAX_DIST_M      = 6.0          # ignore readings farther than this
+MAX_DIST_M      = 5.0         # ignore readings farther than this
 
 # ── Angular zones within the 180° front arc ───────────────────────────────────
 # Forward = 0°,  Right = +90°,  Left = -90°
@@ -92,10 +92,10 @@ ZONES: Dict[str, Tuple[float, float]] = {
 
 # ── Distance thresholds — paper eq.11 (speed-zone logic) ─────────────────────
 STOP_ENTER_M    = 1.0          # enter STOP when front < 1.0 m
-STOP_EXIT_M     = 1.5          # exit  STOP when front > 1.5 m (hysteresis)
+STOP_EXIT_M     = 1.25          # exit  STOP when front > 1.25 m (hysteresis)
 DANGER_DIST_M   = 1.5          # < 1.5 m → turn NOW
 WARN_DIST_M     = 3.5          # < 3.5 m → slow / steer
-SAFE_DIST_M     = 6.0          # ≥ 6.0 m → clear ahead
+SAFE_DIST_M     = 4.5         # ≥ 4.5 m → clear ahead
 
 # ── Alert hysteresis ─────────────────────────────────────────────────────────
 ALERT_ENTER_M  = 0.5          # trigger alerts only within 0.5 m

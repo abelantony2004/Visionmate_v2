@@ -12,7 +12,13 @@ import time
 import threading
 import cv2
 
-from lidar_new import LidarReader, _FusionSmoother
+from lidar_new import (
+    LidarReader,
+    _FusionSmoother,
+    ALERT_ENTER_M,
+    DANGER_DIST_M,
+    SAFE_DIST_M,
+)
 from yolo_live import CameraDetector
 from fusion    import SensorFusion, FusedObstacle
 from typing    import List
@@ -28,65 +34,132 @@ try:
 except Exception:
     TTS_OK = False
 
-TTS_COOLDOWN_S  = 3.0
-_tts_last: dict = {}
-_tts_lock       = threading.Lock()
-TTS_CLEAR_PHRASE = "path clear"
-_tts_last_phrase = ""
-_tts_last_time   = 0.0
-_tts_clear_spoken = False
+TTS_UPDATE_INTERVAL_S = 3.0
+TTS_DANGER_COOLDOWN_S = 1.0
+TTS_ALERT_DIST_M = 3.0
+_tts_last_time = 0.0
+_tts_lock = threading.Lock()
+_last_tts_line = "SILENT"
+_last_tts_line_time = 0.0
 
 
 def speak(phrase: str):
     if not TTS_OK:
         return
-    now = time.time()
-    with _tts_lock:
-        if now - _tts_last.get(phrase, 0) < TTS_COOLDOWN_S:
-            return
-        _tts_last[phrase] = now
     threading.Thread(target=_say, args=(phrase,), daemon=True).start()
 
 
 def _say(phrase: str):
     try:
-        _tts.say(phrase)
-        _tts.runAndWait()
+        with _tts_lock:
+            _tts.say(phrase)
+            _tts.runAndWait()
     except Exception:
         pass
 
 
-def _suggest_path(obstacles: List[FusedObstacle]) -> str:
-    """Recommend a direction based on the current fused obstacle set."""
-    relevant = [o for o in obstacles if o.distance_m <= 2.5]
-    if not relevant:
-        return "Path clear — continue ahead"
+def _side_from_angle(angle_deg: float) -> str:
+    if angle_deg > PATH_CLEAR_DEG:
+        return "RIGHT"
+    if angle_deg < -PATH_CLEAR_DEG:
+        return "LEFT"
+    return "FRONT"
 
-    ahead_blocked = any(o for o in relevant if o.in_path)
-    if not ahead_blocked:
-        return "Continue ahead"
 
-    closest_ahead = min((o for o in relevant if o.in_path), key=lambda o: o.distance_m)
-    if closest_ahead.distance_m < 0.5:
-        return "Stop — obstacle too close"
+def _side_clearances(obstacles: List[FusedObstacle]) -> tuple[float, float]:
+    left = min(
+        (o.distance_m for o in obstacles if o.angle_deg < -PATH_CLEAR_DEG),
+        default=SAFE_DIST_M + 1.0,
+    )
+    right = min(
+        (o.distance_m for o in obstacles if o.angle_deg > PATH_CLEAR_DEG),
+        default=SAFE_DIST_M + 1.0,
+    )
+    return left, right
 
-    left_obs  = [o for o in relevant if o.angle_deg < -PATH_CLEAR_DEG]
-    right_obs = [o for o in relevant if o.angle_deg >  PATH_CLEAR_DEG]
-    left_clear  = min((o.distance_m for o in left_obs),  default=6.0)
-    right_clear = min((o.distance_m for o in right_obs), default=6.0)
 
-    if left_clear >= 1.0 or right_clear >= 1.0:
-        if left_clear >= right_clear:
-            return f"Bear left — {left_clear:.1f}m clearance on left"
-        else:
-            return f"Bear right — {right_clear:.1f}m clearance on right"
-    return "Stop — all directions blocked"
+def _best_turn_side(obstacles: List[FusedObstacle]) -> str:
+    left_clear, right_clear = _side_clearances(obstacles)
+    if left_clear >= right_clear + 0.3:
+        return "LEFT"
+    if right_clear >= left_clear + 0.3:
+        return "RIGHT"
+    return "STRAIGHT"
+
+
+def _turn_intensity(angle_deg: float, distance_m: float, side: str) -> str:
+    if side == "STRAIGHT":
+        return "STRAIGHT"
+    if abs(angle_deg) >= 35:
+        return "SHARP"
+    if abs(angle_deg) >= PATH_CLEAR_DEG:
+        return "SLIGHTLY"
+    return "SHARP" if distance_m < (DANGER_DIST_M + 0.5) else "SLIGHTLY"
+
+
+def _go_phrase(
+    obstacle: FusedObstacle,
+    obstacles: List[FusedObstacle],
+) -> str:
+    side = _side_from_angle(obstacle.angle_deg)
+    if side == "LEFT":
+        return f"{_turn_intensity(obstacle.angle_deg, obstacle.distance_m, 'RIGHT')} RIGHT"
+    if side == "RIGHT":
+        return f"{_turn_intensity(obstacle.angle_deg, obstacle.distance_m, 'LEFT')} LEFT"
+    best = _best_turn_side(obstacles)
+    if best == "STRAIGHT":
+        return "STRAIGHT"
+    intensity = "SHARP" if obstacle.distance_m < 2.0 else "SLIGHTLY"
+    return f"{intensity} {best}"
+
+
+def _lean_phrase(
+    obstacle: FusedObstacle,
+    obstacles: List[FusedObstacle],
+) -> str:
+    side = _side_from_angle(obstacle.angle_deg)
+    if side == "LEFT":
+        return "Lean RIGHT"
+    if side == "RIGHT":
+        return "Lean LEFT"
+    best = _best_turn_side(obstacles)
+    if best == "LEFT":
+        return "Lean LEFT"
+    if best == "RIGHT":
+        return "Lean RIGHT"
+    return "GO STRAIGHT"
+
+
+def _tts_message(
+    obstacle: FusedObstacle,
+    obstacles: List[FusedObstacle],
+    danger_close: bool,
+) -> str:
+    name = obstacle.class_name or "obstacle"
+    side = _side_from_angle(obstacle.angle_deg)
+
+    if danger_close:
+        go = _go_phrase(obstacle, obstacles)
+        return f"STOP. Go {go}."
+
+    if obstacle.distance_m < DANGER_DIST_M:
+        return "STOP, danger close."
+
+    if obstacle.distance_m < TTS_ALERT_DIST_M:
+        go = _go_phrase(obstacle, obstacles)
+        return f"ALERT! {name} on {side}. Go {go}."
+
+    if obstacle.distance_m < SAFE_DIST_M:
+        lean = _lean_phrase(obstacle, obstacles)
+        return f"{name} on {side}. {lean}."
+
+    return ""
 
 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def main():
-    global _tts_last_phrase, _tts_last_time, _tts_clear_spoken
+    global _tts_last_time, _last_tts_line, _last_tts_line_time
     parser = argparse.ArgumentParser()
     parser.add_argument("--lidar-port",  default="/dev/ttyUSB0")
     parser.add_argument("--no-display",  action="store_true")
@@ -120,45 +193,46 @@ def main():
             for msg in alerts:
                 print(f"\033[91m[ALERT] {msg}\033[0m", flush=True)
 
-            # ── TTS for critical / in-path obstacles (every cycle) ───────────
+            # ── TTS alert system ────────────────────────────────────────────
             now = time.time()
-            if obstacles:
-                _tts_clear_spoken = False
-                closest = min(obstacles, key=lambda o: o.distance_m)
-                phrase = closest.tts_phrase
-                if phrase != _tts_last_phrase:
-                    if now - _tts_last_time >= 1.5:
-                        print(f"[TTS] {phrase}", flush=True)
-                        speak(phrase)
-                        _tts_last_phrase = phrase
-                        _tts_last_time = now
-                elif now - _tts_last_time >= TTS_COOLDOWN_S:
-                    print(f"[TTS] {phrase}", flush=True)
+            alert_range = [o for o in obstacles if o.distance_m < SAFE_DIST_M]
+            danger_close = any(o.distance_m < ALERT_ENTER_M for o in alert_range)
+
+            if danger_close and (now - _tts_last_time >= TTS_DANGER_COOLDOWN_S):
+                closest = min(alert_range, key=lambda o: o.distance_m)
+                phrase = _tts_message(closest, alert_range, danger_close=True)
+                if phrase:
                     speak(phrase)
                     _tts_last_time = now
-            else:
-                if not _tts_clear_spoken and now - _tts_last_time >= 1.5:
-                    print(f"[TTS] {TTS_CLEAR_PHRASE}", flush=True)
-                    speak(TTS_CLEAR_PHRASE)
-                    _tts_last_phrase = TTS_CLEAR_PHRASE
+                    _last_tts_line = phrase
+                    _last_tts_line_time = now
+            elif alert_range and (now - _tts_last_time >= TTS_UPDATE_INTERVAL_S):
+                closest = min(alert_range, key=lambda o: o.distance_m)
+                phrase = _tts_message(closest, alert_range, danger_close=False)
+                if phrase:
+                    speak(phrase)
                     _tts_last_time = now
-                    _tts_clear_spoken = True
+                    _last_tts_line = phrase
+                    _last_tts_line_time = now
 
             # ── Throttled console output (1 Hz) ─────────────────────────────
             if t0 - last_print >= 1.0:
+                prev_print = last_print
                 last_print = t0
                 print()
                 print(time.strftime("%H:%M:%S"))
                 if obstacles:
-                    print(f"obstacles detected: {len(obstacles)}")
                     for i, obs in enumerate(obstacles, 1):
-                        print(f"  object {i}  {obs.class_name} — "
-                              f"{obs.distance_m:.2f}m, "
-                              f"{obs.angle_deg:+.0f}° {obs.direction}")
-                    print(f"path: {_suggest_path(obstacles)}")
+                        print(
+                            f"obstacle {i} - {obs.class_name}, "
+                            f"{obs.distance_m:.2f}m, "
+                            f"{obs.angle_deg:+.0f}°"
+                        )
                 else:
-                    print("obstacles detected: 0")
-                    print("path: Path clear — continue ahead")
+                    print("obstacles: 0")
+
+                tts_line = _last_tts_line if _last_tts_line_time >= prev_print else "SILENT"
+                print(f"[TTS] {tts_line}")
 
             # ── Display window ────────────────────────────────────────────────
             if not args.no_display:
